@@ -1,9 +1,9 @@
 /*
  *
- * FeatureInfoDisplay.js -- part of Quantum GIS Web Client
+ * FeatureInfoDisplay.js -- part of QGIS Web Client
  *
  * Copyright (2010-2012), The QGIS Project All rights reserved.
- * Quantum GIS Web Client is released under a BSD license. Please see
+ * QGIS Web Client is released under a BSD license. Please see
  * https://github.com/qgis/qgis-web-client/blob/master/README
  * for the full text of the license and the list of contributors.
  *
@@ -260,24 +260,26 @@ function removeHoverPopup(){
     featureInfoHighlightLayer.removeAllFeatures();
 }
 
-function showFeatureSelected(args) {
-    // select feature in layer
-    thematicLayer.mergeNewParams({
-        "SELECTION": args["layer"] + ":" + args["id"]
-    });
-    if (args["doZoomToExtent"]){
-        geoExtMap.map.zoomToExtent(args["bbox"]);
-    }
-    else{
-        geoExtMap.map.setCenter(new OpenLayers.LonLat(args["x"], args["y"]), args["zoom"]);
-    }
-}
 
-function clearFeatureSelected() {
-    // clear selection
-    thematicLayer.mergeNewParams({
-        "SELECTION": null
-    });
+/**
+ * Search for if a custom formatter exists for this layerName and
+ * attName combination and return formatter's results if found.
+ *
+ */
+function runCustomFormatters(attValue, attName, layerName ){
+    try {
+        if (typeof getFeatureInfoCustomFormatters[layerName][attName] == 'object') {
+            var ret = '';
+            Ext.each(getFeatureInfoCustomFormatters[layerName][attName], function(formatter){
+                ret += formatter(attValue, attName, layerName);
+            });
+            return ret;
+        } else {
+            return getFeatureInfoCustomFormatters[layerName][attName](attValue, attName, layerName);
+        }
+    } catch(e){
+        return attValue;
+    }
 }
 
 function parseFIResult(node) {
@@ -340,6 +342,8 @@ function parseFIResult(node) {
                                               attValue = "<a href=\"/" + attValue + "\" target=\"_blank\">" + attValue + "</a>";
                                           }
                                       }
+                                      // Check for custom formatters and apply if found
+                                      attValue = runCustomFormatters(attValue, attName, node.getAttribute("name"));
                                       htmlText += "<td>" + attValue + "</td></tr>";
                                       hasAttributes = true;
                                   }

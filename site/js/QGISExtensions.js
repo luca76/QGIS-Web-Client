@@ -1,20 +1,21 @@
 /*
  *
- * QGISExtensions.js -- part of Quantum GIS Web Client
+ * QGISExtensions.js -- part of QGIS Web Client
  *
  * Copyright (2010-2012), The QGIS Project All rights reserved.
- * Quantum GIS Web Client is released under a BSD license. Please see
+ * QGIS Web Client is released under a BSD license. Please see
  * https://github.com/qgis/qgis-web-client/blob/master/README
  * for the full text of the license and the list of contributors.
  *
 */
 
-/* Five QGIS extensions:
+/* QGIS extensions:
 * QGIS.WMSCapabilitiesLoader
 * QGIS.PrintProvider
 * QGIS.SearchComboBox
 * QGIS.SearchPanel
 * QGIS.FeatureInfoParser
+* QGIS.Highlighter
 * QGIS.LayerOrderPanel
 */
 
@@ -57,12 +58,13 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
         this.WMSCapabilities.loadXML(response.responseText);
       }
     }
+
     this.projectSettings = new OpenLayers.Format.WMSCapabilities({
       readers: {
         "wms": OpenLayers.Util.applyDefaults({
 
           "ComposerTemplates": function(node, obj) {
-            obj.composerTemplates = []
+            obj.composerTemplates = [];
             this.readChildNodes(node, obj.composerTemplates);
           },
           "ComposerTemplate": function(node, obj) {
@@ -80,6 +82,15 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
               width: parseInt(node.getAttribute("width")),
               height: parseInt(node.getAttribute("height"))
             };
+          },
+
+          "ExclusiveLayerGroups": function(node, obj) {
+            obj.exclusiveLayerGroups = [];
+            this.readChildNodes(node, obj.exclusiveLayerGroups);
+          },
+          "group": function(node, obj) {
+            // comma separated layer names
+            obj.push(this.getChildValue(node).split(','));
           },
 
           "LayerDrawingOrder": function(node, obj) {
@@ -105,11 +116,20 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
             var opaque = (attrNode && attrNode.specified) ?
               node.getAttribute('opaque') : null;
 
-            // custom attributes
+            // QGIS custom attributes
             attrNode = node.getAttributeNode("visible");
             var visible = (attrNode && attrNode.specified) ?
               node.getAttribute("visible") : null;
             var displayField = node.getAttribute('displayField');
+            attrNode = node.getAttributeNode("checkbox");
+            var showCheckbox = (attrNode && attrNode.specified) ?
+              node.getAttribute("checkbox") : null;
+            attrNode = node.getAttributeNode("legend");
+            var showLegend = (attrNode && attrNode.specified) ?
+              node.getAttribute("legend") : null;
+            attrNode = node.getAttributeNode("metadata");
+            var showMetadata = (attrNode && attrNode.specified) ?
+              node.getAttribute("metadata") : null;
 
             var noSubsets = node.getAttribute('noSubsets');
             var fixedWidth = node.getAttribute('fixedWidth');
@@ -134,10 +154,17 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
                     opaque: opaque ?
                         (opaque === "1" || opaque === "true" ) :
                         (parent.opaque || false),
-                                        //visible and displayField are QGIS extensions
+                                        // QGIS extensions
                                         visible: (visible && visible !== "") ?
                                             ( visible === "1" || visible === "true" ) : true,
                                         displayField: displayField,
+                                        showCheckbox: (showCheckbox && showCheckbox !== "") ?
+                                            ( showCheckbox === "1" || showCheckbox === "true" ) : true,
+                                        showLegend: (showLegend && showLegend !== "") ?
+                                            ( showLegend === "1" || showLegend === "true" ) : true,
+                                        showMetadata: (showMetadata && showMetadata !== "") ?
+                                            ( showMetadata === "1" || showMetadata === "true" ) : true,
+
                                         noSubsets: (noSubsets !== null) ?
                                                 (noSubsets === "1" || noSubsets === "true" ) :
                                                 (parent.noSubsets || false),
@@ -149,26 +176,26 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
                                         maxScale: parent.maxScale,
                                         attribution: parent.attribution
                                 };
-            obj.nestedLayers.push(layer);
             layer.capability = capability;
             this.readChildNodes(node, layer);
-                        delete layer.capability;
-                if(layer.name) {
-                    var parts = layer.name.split(":"),
-                        request = capability.request,
-                        gfi = request.getfeatureinfo;
-                    if(parts.length > 0) {
-                        layer.prefix = parts[0];
-                    }
-                    capability.layers.push(layer);
-                    if (layer.formats === undefined) {
-                        layer.formats = request.getmap.formats;
-                    }
-                    if (layer.infoFormats === undefined && gfi) {
-                        layer.infoFormats = gfi.formats;
-                    }
+            delete layer.capability;
+            obj.nestedLayers.push(layer);
+            if(layer.name) {
+                var parts = layer.name.split(":"),
+                    request = capability.request,
+                    gfi = request.getfeatureinfo;
+                if(parts.length > 0) {
+                    layer.prefix = parts[0];
                 }
-            },
+                capability.layers.push(layer);
+                if (layer.formats === undefined) {
+                    layer.formats = request.getmap.formats;
+                }
+                if (layer.infoFormats === undefined && gfi) {
+                    layer.infoFormats = gfi.formats;
+                }
+            }
+        },
 
           "Attributes": function(node, obj) {
             obj.attributes = []
@@ -193,31 +220,65 @@ Ext.extend(QGIS.WMSCapabilitiesLoader, GeoExt.tree.WMSCapabilitiesLoader, {
     }).read(this.WMSCapabilities);
     this.processLayer(this.projectSettings.capability, this.projectSettings.capability.request.getmap.href, node);
 
+    // WMTS base layers
+    var wmtsLayers = [];
+    if (enableWmtsBaseLayers) {
+      // use root layer name from project settings as topic name on first load
+      var topicName = this.topicName || this.projectSettings.capability.nestedLayers[0].name;
+
+      // collect print layers for WMTS layers
+      var wmtsLayersConfig = getWmtsLayersConfig(topicName);
+      if (wmtsLayersConfig != null) {
+        for (var i=0; i<wmtsLayersConfig.length; i++) {
+          var config = wmtsLayersConfig[i];
+          wmtsLayers.push(config.wmsLayerName);
+        }
+      }
+
+      // prepend WMTS base layers in drawing order
+      var layerDrawingOrder = wmtsLayers.concat();
+      for (var i=0; i<this.projectSettings.capability.layerDrawingOrder.length; i++) {
+        var layer = this.projectSettings.capability.layerDrawingOrder[i];
+        if (wmtsLayers.indexOf(layer) == -1) {
+          layerDrawingOrder.push(layer);
+        }
+      }
+      this.projectSettings.capability.layerDrawingOrder = layerDrawingOrder;
+    }
+
     //fill the list of layer properties
     for (var i=0; i<this.projectSettings.capability.layers.length; i++) {
       var layer = this.projectSettings.capability.layers[i];
       this.layerProperties[layer.name] = {
         name: layer.name,
         title: layer.title,
-                abstract: layer.abstract,
-                visible: layer.visible,
+        abstract: layer.abstract,
+        visible: layer.visible,
         opacity: 255,
         queryable: layer.queryable,
         displayField: layer.displayField,
         nrChildLayers: layer.nestedLayers.length,
-                attributes: layer.attributes,
-                srsList: layer.srs,
-                bbox: layer.llbbox
+        attributes: layer.attributes,
+        srsList: layer.srs,
+        bbox: layer.llbbox,
+        minScale: (layer.minScale != null) ? parseFloat(layer.minScale) : null,
+        maxScale: (layer.maxScale != null) ? parseFloat(layer.maxScale) : null,
+        wmtsLayer: (wmtsLayers.indexOf(layer.name) != -1), // mark WMTS base layers
+        showLegend: layer.showLegend,
+        showMetadata: layer.showMetadata
       };
-            this.layerTitleNameMapping[layer.title] = layer.name;
-            if (layer.visible) {
-                this.initialVisibleLayers.push(layer.name);
-            }
+      this.layerTitleNameMapping[layer.title] = layer.name;
+      if (layer.visible) {
+        this.initialVisibleLayers.push(layer.name);
+      }
     }
 
     // defaults for GetCapabilities
-    if (this.projectSettings.capability.composerTemplates == undefined) {
+    if (this.projectSettings.capability.composerTemplates === undefined) {
       this.projectSettings.capability.composerTemplates = [];
+    }
+    if (this.projectSettings.capability.exclusiveLayerGroups === undefined) {
+      this.projectSettings.capability.exclusiveLayerGroups = [];
     }
 
     //deal with callback function
@@ -349,12 +410,33 @@ Ext.extend(QGIS.PrintProvider, GeoExt.data.PrintProvider, {
         printResolution = this.dpi.get("value");
     }
 
-    var printUrl = this.url+'&SRS='+authid+'&DPI='+printResolution+'&TEMPLATE='+this.layout.get("name")+'&map0:extent='+printExtent.page.getPrintExtent(map).toBBOX(1,false)+'&map0:rotation='+(printExtent.page.rotation * -1)+'&map0:scale='+mapScale+'&map0:grid_interval_x='+grid_interval+'&map0:grid_interval_y='+grid_interval+'&LAYERS='+encodeURIComponent(thematicLayer.params.LAYERS);
+    var layers = thematicLayer.params.LAYERS;
+
+    if (enableWmtsBaseLayers) {
+      // collect print layers for visible WMTS layers
+      var printLayers = [];
+      var wmtsLayers = getWmtsLayers();
+      for (var i=0; i<wmtsLayers.length; i++) {
+        var wmtsLayer = wmtsLayers[i];
+        if (wmtsLayer.show) {
+            printLayers.push(wmtsLayer.wmsLayerName);
+        }
+      }
+      if (printLayers.length > 0) {
+        // prepend WMTS print layers
+        layers = printLayers.join(',') + "," + layers;
+      }
+    }
+
+    var printUrl = this.url+'&SRS='+authid+'&DPI='+printResolution+'&TEMPLATE='+this.layout.get("name")+'&map0:extent='+printExtent.page.getPrintExtent(map).toBBOX(1,false)+'&map0:rotation='+(printExtent.page.rotation * -1)+'&map0:scale='+mapScale+'&map0:grid_interval_x='+grid_interval+'&map0:grid_interval_y='+grid_interval+'&LAYERS='+encodeURIComponent(layers);
     if (thematicLayer.params.OPACITIES) {
       printUrl += '&OPACITIES='+encodeURIComponent(thematicLayer.params.OPACITIES);
     }
-    if (thematicLayer.params.SELECTION) {
-      printUrl += '&SELECTION='+encodeURIComponent(thematicLayer.params.SELECTION);
+
+    // add highlight
+    var highlightParams = highlighter.printParams("map0");
+    if (highlightParams != null) {
+      printUrl += "&" + Ext.urlEncode(highlightParams);
     }
 
     // makes spatial query from map to use the attributes in the print template (more in README chap 4.5)
@@ -374,13 +456,21 @@ Ext.extend(QGIS.PrintProvider, GeoExt.data.PrintProvider, {
             readWithPOST: true
     });
 
+    this.fireEvent("afterprint", this, map, pages, options);
+
     protocol.read({
         callback: function(response) {
-                if(response.features.length > 0) {
-                    attributes = response.features[0].attributes;
-                     for (key in attributes){
-                        printUrl += '&' + key + '=' + encodeURIComponent(attributes[key]);
+                try { // as some projects may have WFS disabled
+                    if(response.features != null) {
+                        if(response.features.length > 0) {
+                            attributes = response.features[0].attributes;
+                             for (key in attributes){
+                                printUrl += '&' + key + '=' + encodeURIComponent(attributes[key]);
+                            }
+                        }
                     }
+                } catch (e) {
+                    //console.log(e)
                 }
             this.download(printUrl);
         },
@@ -423,6 +513,10 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
   map: null,
   highlightLayerName: null,
   highlightLayer: null,
+  useWmsHighlight: false,
+  wmsHighlightLabelAttribute: null,
+  wmsHighlightLabel: null,
+  highlighter: null,
   hasReverseAxisOrder: false,
 
   /** config
@@ -447,6 +541,10 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
     this.on("keyUp", this.keyUpHandler);
     this.on("afterrender", this.afterrenderHandler);
     this.on("beforeselect", this.beforeselectHandler);
+    var fields = ['searchtable', 'displaytext', 'bbox', 'showlayer', 'selectable'];
+    if (this.useWmsHighlight && fields.indexOf(this.wmsHighlightLabelAttribute) == -1) {
+      fields.push(this.wmsHighlightLabelAttribute);
+    }
     this.store = new Ext.data.JsonStore({
       proxy: new Ext.data.ScriptTagProxy({
         url: this.url,
@@ -459,7 +557,7 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
         searchtables: this.getSearchTables()
       },
       root: 'results',
-      fields: ['searchtable', 'displaytext', 'bbox', 'showlayer', 'selectable']
+      fields: fields
     });
     this.tpl = new Ext.XTemplate(
       '<tpl for="."><div class="x-combo-list-item {service}">',
@@ -572,7 +670,11 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
         //need to check if extent is too small
         this.map.zoomToExtent(extent);
     }
-    if (this.highlightLayer) {
+    if (this.highlightLayer || (this.useWmsHighlight && this.highlighter)) {
+      if (this.useWmsHighlight) {
+        // set highlight label text
+        this.wmsHighlightLabel = record.get(this.wmsHighlightLabelAttribute);
+      }
       //network request to get real wkt geometry of search object
       Ext.Ajax.request({
       url: this.geomUrl,
@@ -580,6 +682,7 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
       failure: function ( result, request) {
         Ext.MessageBox.alert(errMessageSearchComboNetworkRequestFailureTitleString[lang], errMessageSearchComboNetworkRequestFailureString+result.responseText);
       },
+      scope: this,
       method: 'GET',
       params: {
           searchtable: record.get('searchtable'),
@@ -614,14 +717,29 @@ QGIS.SearchComboBox = Ext.extend(Ext.form.ComboBox, {
             layerTree.fireEvent("leafschange");
         }
     }
-    this.highlightLayer.removeAllFeatures();
-    var feature = new OpenLayers.Feature.Vector(OpenLayers.Geometry.fromWKT(result.responseText));
-    this.highlightLayer.addFeatures([feature]);
+    // highlight feature
+    if (this.useWmsHighlight) {
+      // use QGIS WMS highlight
+      this.highlighter.highlightFeature({
+        geom: result.responseText,
+        labelstring: this.wmsHighlightLabel
+      });
+    }
+    else {
+      // add OpenLayers vector feature
+      this.highlightLayer.removeAllFeatures();
+      var feature = new OpenLayers.Feature.Vector(OpenLayers.Geometry.fromWKT(result.responseText));
+      this.highlightLayer.addFeatures([feature]);
+    }
   },
   clearSearchResult: function() {
     this.setValue("");
+    this.wmsHighlightLabel = null;
     if (this.highlightLayer) {
       this.highlightLayer.removeAllFeatures();
+    }
+    if (this.highlighter) {
+      this.highlighter.unhighlightFeature();
     }
   },
   getSearchTables: function() {
@@ -777,7 +895,13 @@ QGIS.SearchPanel = Ext.extend(Ext.Panel, {
         else {
           valueQuotes = "'"
         }
-        filter.push("\"" + key + "\" "+ filterOp +" " + valueQuotes + fieldValues[key] + valueQuotes);
+       if (field.initialConfig.filterOp.indexOf('LIKE')>-1) {
+            valueExtra="%";
+        }
+        else {
+            valueExtra="";
+        }
+        filter.push("\"" + key + "\" "+ filterOp +" " + valueQuotes + valueExtra + fieldValues[key] + valueExtra + valueQuotes);
         fieldsValidate &= field.validate();
       }
     }
@@ -894,7 +1018,38 @@ QGIS.SearchPanel = Ext.extend(Ext.Panel, {
       if (this.hasOwnProperty('doZoomToExtent')){
         doZoomToExtent = this.doZoomToExtent;
       }
-      this.fireEvent("featureselected", {"layer":this.selectionLayer, "id":id, "x":x, "y":y, "bbox":new OpenLayers.Bounds(bbox.minx,bbox.miny,bbox.maxx,bbox.maxy), "zoom":this.selectionZoom, "doZoomToExtent":doZoomToExtent});
+
+      var highlightFeature = false;
+      if (this.hasOwnProperty('highlightFeature')){
+        highlightFeature = this.highlightFeature;
+      }
+
+      var args = {
+        doZoomToExtent: doZoomToExtent
+      };
+      // zoom settings
+      if (doZoomToExtent) {
+        args.bbox = new OpenLayers.Bounds(bbox.minx,bbox.miny,bbox.maxx,bbox.maxy);
+      }
+      else {
+        args.x = x;
+        args.y = y;
+        args.zoom = this.selectionZoom;
+      }
+
+      // highlight or selection
+      if (highlightFeature) {
+        args.geom = record.data.geometry;
+        if (this.hasOwnProperty('highlightLabel')) {
+          args.labelstring = record.data[this.highlightLabel];
+        }
+      }
+      else {
+        args.layer = this.selectionLayer;
+        args.id = id;
+      }
+
+      this.fireEvent("featureselected", args);
     }
   }
 });
@@ -1053,6 +1208,203 @@ Ext.override(Ext.ToolTip, {
       }
    }
 });
+
+
+/************************** QGIS.Highlighter ************************ */
+// highlight feature of selected search result
+QGIS.Highlighter = Ext.extend(Object, {
+  map: null,
+  layer: null,
+  symbols: null,
+  highlightParams: null,
+
+  constructor: function(map, wmsLayer) {
+    this.map = map;
+    this.layer = wmsLayer;
+
+    this.createSymbols();
+  },
+
+  clear: function() {
+    this.highlightParams = null;
+    this.layer.mergeNewParams({
+      HIGHLIGHT_GEOM: null,
+      HIGHLIGHT_SYMBOL: null,
+      HIGHLIGHT_LABELSTRING: null,
+      HIGHLIGHT_LABELFONT: null,
+      HIGHLIGHT_LABELSIZE: null,
+      HIGHLIGHT_LABELWEIGHT: null,
+      HIGHLIGHT_LABELCOLOR: null,
+      HIGHLIGHT_LABELBUFFERCOLOR: null,
+      HIGHLIGHT_LABELBUFFERSIZE: null,
+      SELECTION: null
+    });
+  },
+
+  // highlight and optionally zoom to feature
+  highlightFeature: function(args) {
+    // highlight feature
+    if (args.geom) {
+      // QGIS WMS highlight
+      var symbol = null;
+      if (args.geom.match(/POINT/)) {
+        symbol = this.symbols.point;
+      }
+      else if (args.geom.match(/LINESTRING/)) {
+        symbol = this.symbols.line;
+      }
+      else if (args.geom.match(/POLYGON/)) {
+        symbol = this.symbols.polygon;
+      }
+
+      this.highlightParams = {
+        HIGHLIGHT_GEOM: args.geom,
+        HIGHLIGHT_SYMBOL: symbol
+      };
+      if (args.labelstring) {
+        this.highlightParams.HIGHLIGHT_LABELSTRING = args.labelstring;
+        this.highlightParams = OpenLayers.Util.extend(this.highlightParams, this.symbols.label);
+      }
+      this.layer.mergeNewParams(this.highlightParams);
+    }
+    else {
+      // QGIS WMS selection
+      this.layer.mergeNewParams({
+        SELECTION: args.layer + ":" + args.id
+      });
+    }
+
+    // zoom to feature
+    if (args.doZoomToExtent){
+      this.map.zoomToExtent(args.bbox);
+    }
+    else if (args.x != undefined && args.y != undefined) {
+      this.map.setCenter(new OpenLayers.LonLat(args.x, args.y), args.zoom);
+    }
+  },
+
+  unhighlightFeature: function() {
+    this.clear();
+  },
+
+  // return parameters for print
+  printParams: function(mapId) {
+    var params = null;
+    if (this.highlightParams != null) {
+      params = {};
+      // add map id prefix
+      for (param in this.highlightParams) {
+        params[mapId + ":" + param] = this.highlightParams[param];
+      }
+      return params;
+    }
+    else if (this.layer.params.SELECTION) {
+      params = {
+        SELECTION: encodeURIComponent(this.layer.params.SELECTION)
+      };
+    }
+    return params;
+  },
+
+  // create SLD symbols and label style from config
+  createSymbols: function() {
+    this.symbols = {};
+    var symbol;
+
+    // point
+    var point = symbolizersHighLightLayer.Point;
+    symbol =  '<StyledLayerDescriptor>';
+    symbol +=   '<UserStyle>';
+    symbol +=     '<Name>Highlight</Name>';
+    symbol +=       '<FeatureTypeStyle>';
+    symbol +=         '<Rule>';
+    symbol +=           '<Name>Symbol</Name>';
+    symbol +=           '<PointSymbolizer>';
+    symbol +=             '<Graphic>';
+    symbol +=               '<Mark>';
+    if (point.graphicName != null) { symbol += '<WellKnownName>' + point.graphicName +'</WellKnownName>'; }
+    symbol +=                 '<Fill>';
+    if (point.fillColor != null) { symbol += '<SvgParameter name="fill">' + point.fillColor +'</SvgParameter>'; }
+    if (point.fillOpacity != null) { symbol += '<SvgParameter name="fill-opacity">' + point.fillOpacity +'</SvgParameter>'; }
+    symbol +=                 '</Fill>';
+    symbol +=                 '<Stroke>';
+    if (point.strokeColor != null) { symbol += '<SvgParameter name="stroke">' + point.strokeColor +'</SvgParameter>'; }
+    if (point.strokeOpacity != null) { symbol += '<SvgParameter name="stroke-opacity">' + point.strokeOpacity +'</SvgParameter>'; }
+    if (point.strokeWidth != null) { symbol += '<SvgParameter name="stroke-width">' + point.strokeWidth +'</SvgParameter>'; }
+    symbol +=                 '</Stroke>';
+    symbol +=               '</Mark>';
+    if (point.pointRadius != null) { symbol += '<Size>' + point.pointRadius + '</Size>'; }
+    if (point.rotation != null) { symbol += '<Rotation>' + point.rotation + '</Rotation>'; }
+    symbol +=             '</Graphic>';
+    symbol +=           '</PointSymbolizer>';
+    symbol +=        '</Rule>';
+    symbol +=     '</FeatureTypeStyle>';
+    symbol +=   '</UserStyle>';
+    symbol += '</StyledLayerDescriptor>';
+    this.symbols.point = symbol;
+
+    // line
+    var line = symbolizersHighLightLayer.Line;
+    symbol =  '<StyledLayerDescriptor>';
+    symbol +=   '<UserStyle>';
+    symbol +=     '<Name>Highlight</Name>';
+    symbol +=       '<FeatureTypeStyle>';
+    symbol +=         '<Rule>';
+    symbol +=           '<Name>Symbol</Name>';
+    symbol +=           '<LineSymbolizer>';
+    symbol +=             '<Stroke>';
+    if (line.strokeColor != null) { symbol += '<SvgParameter name="stroke">' + line.strokeColor + '</SvgParameter>'; }
+    if (line.strokeOpacity != null) { symbol += '<SvgParameter name="stroke-opacity">' + line.strokeOpacity + '</SvgParameter>'; }
+    if (line.strokeWidth != null) { symbol += '<SvgParameter name="stroke-width">' + line.strokeWidth + '</SvgParameter>'; }
+    if (line.strokeLinecap != null) { symbol += '<SvgParameter name="stroke-linecap">' + line.strokeLinecap + '</SvgParameter>'; }
+    if (line.strokeDashstyle != null && line.strokeDashstyle.match(/\S+\s+\S+/)) { symbol += '<SvgParameter name="stroke-dasharray">' + line.strokeDashstyle + '</SvgParameter>'; }
+    symbol +=             '</Stroke>';
+    symbol +=           '</LineSymbolizer>';
+    symbol +=        '</Rule>';
+    symbol +=     '</FeatureTypeStyle>';
+    symbol +=   '</UserStyle>';
+    symbol += '</StyledLayerDescriptor>';
+    this.symbols.line = symbol;
+
+    // polygon
+    var polygon = symbolizersHighLightLayer.Polygon;
+    symbol =  '<StyledLayerDescriptor>';
+    symbol +=   '<UserStyle>';
+    symbol +=     '<Name>Highlight</Name>';
+    symbol +=       '<FeatureTypeStyle>';
+    symbol +=         '<Rule>';
+    symbol +=           '<Name>Symbol</Name>';
+    symbol +=           '<PolygonSymbolizer>';
+    symbol +=             '<Fill>';
+    if (polygon.fillColor != null) { symbol += '<SvgParameter name="fill">' + polygon.fillColor + '</SvgParameter>'; }
+    if (polygon.fillOpacity != null) { symbol += '<SvgParameter name="fill-opacity">' + polygon.fillOpacity + '</SvgParameter>'; }
+    symbol +=             '</Fill>';
+    symbol +=             '<Stroke>';
+    if (polygon.strokeColor != null) { symbol += '<SvgParameter name="stroke">' + polygon.strokeColor + '</SvgParameter>'; }
+    if (polygon.strokeOpacity != null) { symbol += '<SvgParameter name="stroke-opacity">' + polygon.strokeOpacity + '</SvgParameter>'; }
+    if (polygon.strokeWidth != null) { symbol += '<SvgParameter name="stroke-width">' + polygon.strokeWidth + '</SvgParameter>'; }
+    if (polygon.strokeLinecap != null) { symbol += '<SvgParameter name="stroke-linecap">' + polygon.strokeLinecap + '</SvgParameter>'; }
+    if (polygon.strokeDashstyle != null && polygon.strokeDashstyle.match(/\S+\s+\S+/)) { symbol += '<SvgParameter name="stroke-dasharray">' + polygon.strokeDashstyle + '</SvgParameter>'; }
+    symbol +=             '</Stroke>';
+    symbol +=           '</PolygonSymbolizer>';
+    symbol +=        '</Rule>';
+    symbol +=     '</FeatureTypeStyle>';
+    symbol +=   '</UserStyle>';
+    symbol += '</StyledLayerDescriptor>';
+    this.symbols.polygon = symbol;
+
+    // label
+    this.symbols.label = {
+      HIGHLIGHT_LABELFONT: highlightLabelStyle.font,
+      HIGHLIGHT_LABELSIZE: highlightLabelStyle.size,
+      HIGHLIGHT_LABELWEIGHT: highlightLabelStyle.weight,
+      HIGHLIGHT_LABELCOLOR: highlightLabelStyle.color,
+      HIGHLIGHT_LABELBUFFERCOLOR: highlightLabelStyle.buffercolor,
+      HIGHLIGHT_LABELBUFFERSIZE: highlightLabelStyle.buffersize
+    };
+  }
+});
+
 
 /* *************************** QGIS.LayerOrderPanel **************************** */
 // extends Ext.Panel with a list of the active layers that can be ordered by the user

@@ -1,9 +1,9 @@
 /*
  *
- * WebgisInit.js -- part of Quantum GIS Web Client
+ * WebgisInit.js -- part of QGIS Web Client
  *
  * Copyright (2010-2013), The QGIS Project All rights reserved.
- * Quantum GIS Web Client is released under a BSD license. Please see
+ * QGIS Web Client is released under a BSD license. Please see
  * https://github.com/qgis/qgis-web-client/blob/master/README
  * for the full text of the license and the list of contributors.
  *
@@ -15,9 +15,17 @@ var selectedLayers; //later an array containing all visible (selected) layers
 var selectedQueryableLayers; //later an array of all visible (selected and queryable) layers
 var allLayers; //later an array containing all leaf layers
 var thematicLayer, highlightLayer, featureInfoHighlightLayer;
+var arrayOSM; //OSM
+var arrayAerial; //OSM
+var arrayCycle; //OSM
+var baseOSM; //OSM
+var baseAerial; //OSM
+var mapnik; //OSM
+var cycle; //OSM
 var googleSatelliteLayer;
 var googleMapLayer;
 var bingSatelliteLayer;
+var highlighter = null;
 var highLightGeometry = new Array();
 var WMSGetFInfo, WMSGetFInfoHover;
 var lastLayer, lastFeature;
@@ -109,6 +117,32 @@ Ext.onReady(function () {
 	//set some status messsages
 	mainStatusText.setText(mapAppLoadingString[lang]);
 
+	//OpenstreetMap background layers
+	if (enableOSMMaps) {	    
+        	arrayOSM = ["http://otile1.mqcdn.com/tiles/1.0.0/map/${z}/${x}/${y}.jpg",
+                    	"http://otile2.mqcdn.com/tiles/1.0.0/map/${z}/${x}/${y}.jpg",
+                    	"http://otile3.mqcdn.com/tiles/1.0.0/map/${z}/${x}/${y}.jpg",
+                    	"http://otile4.mqcdn.com/tiles/1.0.0/map/${z}/${x}/${y}.jpg"];
+        	arrayAerial = ["http://otile1.mqcdn.com/tiles/1.0.0/sat/${z}/${x}/${y}.jpg",
+                        "http://otile2.mqcdn.com/tiles/1.0.0/sat/${z}/${x}/${y}.jpg",
+                        "http://otile3.mqcdn.com/tiles/1.0.0/sat/${z}/${x}/${y}.jpg",
+                        "http://otile4.mqcdn.com/tiles/1.0.0/sat/${z}/${x}/${y}.jpg"];
+       		arrayCycle = ["http://a.tile.opencyclemap.org/cycle/${z}/${x}/${y}.png",
+   			"http://b.tile.opencyclemap.org/cycle/${z}/${x}/${y}.png",
+   			"http://c.tile.opencyclemap.org/cycle/${z}/${x}/${y}.png"];
+
+        	baseOSM = new OpenLayers.Layer.OSM("MapQuest-OSM Tiles", arrayOSM, {numZoomLevels: 19, attribution: "Data, imagery and map information provided by <a href='http://www.mapquest.com/'  target='_blank'>MapQuest</a>, <a href='http://www.openstreetmap.org/' target='_blank'>Open Street Map</a> and contributors, <a href='http://creativecommons.org/licenses/by-sa/2.0/' target='_blank'>CC-BY-SA</a>  <img src='http://developer.mapquest.com/content/osm/mq_logo.png' border='0'>"} );
+       		baseAerial = new OpenLayers.Layer.OSM("MapQuest Open Aerial Tiles (zoom < 11)", arrayAerial, {numZoomLevels: 11, attribution: "Data, imagery and map information provided by <a href='http://www.mapquest.com/'  target='_blank'>MapQuest</a>, <a href='http://www.openstreetmap.org/' target='_blank'>Open Street Map</a> and contributors, <a href='http://creativecommons.org/licenses/by-sa/2.0/' target='_blank'>CC-BY-SA</a>  <img src='http://developer.mapquest.com/content/osm/mq_logo.png' border='0'>"});
+		mapnik= new OpenLayers.Layer.OSM("OpenStreetMap (mapnik)");
+		cycle = new OpenLayers.Layer.OSM("OpenCycleMap",arrayCycle, {attribution: "<a href='http://www.openstreetmap.org/' target='_blank'>Open Street Map</a> and contributors. Tiles courtesy of<a target='_blank' href='http://www.thunderforest.com/'>Andy Allan</a>"});
+
+
+		baseLayers.push(mapnik)
+		baseLayers.push(baseOSM);
+		baseLayers.push(cycle);
+		baseLayers.push(baseAerial);
+	}
+
 	if (enableGoogleCommercialMaps) {
 		googleSatelliteLayer = new OpenLayers.Layer.Google(
 			"Google Satellite",
@@ -133,7 +167,7 @@ Ext.onReady(function () {
 	}
 
 	if (urlParamsOK) {
-		loadWMSConfig();
+		loadWMSConfig(null);
 	} else {
 		alert(errMessageStartupNotAllParamsFoundString[lang]);
 	}
@@ -162,7 +196,7 @@ Ext.onReady(function () {
     customPostLoading(); //in Customizations.js
 });
 
-function loadWMSConfig() {
+function loadWMSConfig(topicName) {
 	loadMask = new Ext.LoadMask(Ext.getCmp('MapPanel').body, {
 		msg: mapLoadingString[lang]
 	});
@@ -182,11 +216,16 @@ function loadWMSConfig() {
 		// customize the createNode method to add a checkbox to nodes and the ui provider
 		createNode: function (attr) {
 			attr.checked = false;
+			if (!attr.layer.metadata.showCheckbox) {
+				// hide checkbox
+				attr.cls = 'layer-checkbox-hidden';
+			}
 			return QGIS.WMSCapabilitiesLoader.prototype.createNode.apply(this, [attr]);
 		},
 		baseAttrs: {
 			uiProvider: Ext.tree.TriStateNodeUI
-		}
+		},
+		topicName: topicName
 	});
 
 	var root = new Ext.tree.AsyncTreeNode({
@@ -371,19 +410,28 @@ function postLoading() {
 			}
 		}
 	}
-	MapOptions.maxExtent = maxExtent;
+	// never change the map extents when using WMTS base layers
+	if (!enableWmtsBaseLayers) {
+		MapOptions.maxExtent = maxExtent;
+	}
 
 	//now collect all selected layers (with checkbox enabled in tree)
 	selectedLayers = Array();
 	selectedQueryableLayers = Array();
 	allLayers = Array();
+	var wmtsLayers = Array();
 
 	layerTree.root.firstChild.cascade(
 
 	function (n) {
 		if (n.isLeaf()) {
 			if (n.attributes.checked) {
-				selectedLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				if (!wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]].wmtsLayer) {
+					selectedLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				}
+				else {
+					wmtsLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				}
 				if (wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]].queryable) {
 					selectedQueryableLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
 				}
@@ -433,7 +481,8 @@ function postLoading() {
 			capabilities: printCapabilities, // from the info.json script in the html
 			url: printUrl
 		});
-        printProvider.addListener("beforeprint", customBeforePrint);
+		printProvider.addListener("beforeprint", customBeforePrint);
+		printProvider.addListener("afterprint", customAfterPrint);
 	}
 
 	if (!printExtent) {
@@ -468,8 +517,23 @@ function postLoading() {
 		var layerDrawingOrder = wmsLoader.projectSettings.capability.layerDrawingOrder;
 		if (layerOrderPanel != null) {
 			// override project settings (after first load)
-			layerDrawingOrder = layerOrderPanel.orderedLayers();
+			if (enableWmtsBaseLayers) {
+				// prepend ordered WMTS layers
+				var orderedLayers = layerOrderPanel.orderedLayers();
+				var wmtsLayers = [];
+				for (var i = 0; i < layerDrawingOrder.length; i++) {
+					var layer = layerDrawingOrder[i];
+					if (orderedLayers.indexOf(layer) == -1) {
+						wmtsLayers.push(layer);
+					}
+				}
+				layerDrawingOrder = wmtsLayers.concat(orderedLayers);
+			}
+			else {
+				layerDrawingOrder = layerOrderPanel.orderedLayers();
+			}
 		}
+
 		if (layerDrawingOrder != null) {
 			var orderedLayers = [];
 			for (var i = 0; i < layerDrawingOrder.length; i++) {
@@ -545,6 +609,11 @@ function postLoading() {
 			"OPACITIES": layerOpacities(selectedLayers),
 			"FORMAT": format
 		});
+	}
+
+	if (enableWmtsBaseLayers) {
+		// add WMTS base layers
+		updateWmtsBaseLayers(layerTree.root.firstChild.text, wmtsLayers);
 	}
 
 	if (!initialLoadDone) {
@@ -632,6 +701,7 @@ function postLoading() {
 		//add OpenLayers map controls
 		geoExtMap.map.addControl(new OpenLayers.Control.KeyboardDefaults());
 		geoExtMap.map.addControl(new OpenLayers.Control.Navigation());
+		geoExtMap.map.addControl(new OpenLayers.Control.Attribution());
 		//to hide miles/feet in the graphical scale bar we need to adapt "olControlScaleLineBottom" in file /OpenLayers/theme/default/style.css: display:none;
 		geoExtMap.map.addControl(new OpenLayers.Control.ScaleLine());
 		geoExtMap.map.addControl(new OpenLayers.Control.PanZoomBar({zoomWorldIcon:true,forceFixedZoomLevel:false}));
@@ -731,6 +801,11 @@ function postLoading() {
 		//todo: find out how to change the max extent in the OverviewMap
 	}
 
+	// highlighting
+	if (!initialLoadDone) {
+		highlighter = new QGIS.Highlighter(geoExtMap.map, thematicLayer);
+	}
+
 	//navigation actions
 	if (!initialLoadDone) {
 		var myTopToolbar = Ext.getCmp('myTopToolbar');
@@ -785,7 +860,8 @@ function postLoading() {
 					width: 300,
 					minChars: 2,
 					loadingText: geonamesLoadingString[lang],
-					emptyText: geonamesEmptyString[lang]
+					emptyText: geonamesEmptyString[lang],
+					username: geoNamesUserName
 				});
 				var emptySearchFieldButton = new Ext.Button({
 					scale: 'medium',
@@ -800,6 +876,9 @@ function postLoading() {
 				qgisSearchCombo = new QGIS.SearchComboBox({
 					map: geoExtMap.map,
 					highlightLayerName: 'attribHighLight',
+					useWmsHighlight: enableSearchBoxWmsHighlight,
+					wmsHighlightLabelAttribute: searchBoxWmsHighlightLabel,
+					highlighter: highlighter,
 					hasReverseAxisOrder: false, // PostGIS returns bbox' coordinates always x/y
 					width: 300,
 					searchtables: searchtables
@@ -951,8 +1030,8 @@ function postLoading() {
 			var searchTabPanel = Ext.getCmp('SearchTabPanel');
 			for (var i = 0; i < searchPanelConfigs.length; i++) {
 				var panel = new QGIS.SearchPanel(searchPanelConfigs[i]);
-				panel.on("featureselected", showFeatureSelected);
-				panel.on("featureselectioncleared", clearFeatureSelected);
+				panel.on("featureselected", highlighter.highlightFeature, highlighter);
+				panel.on("featureselectioncleared", highlighter.unhighlightFeature, highlighter);
 				panel.on("beforesearchdataloaded", showSearchPanelResults);
                 // Just for debugging...
 				// panel.on("afterdsearchdataloaded", function(e){console.log(e);});
@@ -1030,11 +1109,17 @@ function postLoading() {
 		//now collect all selected queryable layers for WMS request
 		selectedLayers = Array();
 		selectedQueryableLayers = Array();
-		layerTree.root.firstChild.cascade(
+		var wmtsLayers = Array();
 
+		layerTree.root.firstChild.cascade(
 		function (n) {
 			if (n.isLeaf() && n.attributes.checked) {
-				selectedLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				if (!wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]].wmtsLayer) {
+					selectedLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				}
+				else {
+					wmtsLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
+				}
 				if (wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]].queryable) {
 					selectedQueryableLayers.push(wmsLoader.layerTitleNameMapping[n.text]);
 				}
@@ -1044,7 +1129,6 @@ function postLoading() {
 			customActionLayerTreeCheck(n);
 		});
 		format = imageFormatForLayers(selectedLayers);
-		updateLayerOrderPanel();
 
 		//change array order
 		selectedLayers = layersInDrawingOrder(selectedLayers);
@@ -1094,7 +1178,12 @@ function postLoading() {
 			};
 			}
 		}
-		
+
+		if (enableWmtsBaseLayers) {
+			// update WMTS layers
+			setVisibleWmtsLayers(wmtsLayers);
+		}
+
 		// switch backgroundLayers
 		if (enableBGMaps) {
 			var checkedBackgroundNodes = [];
@@ -1125,13 +1214,20 @@ function postLoading() {
 			}
 			currentlyVisibleBaseLayer = newVisibleBaseLayer;
 		}
+
+		updateLayerOrderPanelVisibilities();
 	}
 
 	if (initialLoadDone) {
 		layerTree.removeListener("leafschange",leafsChangeFunction);
 	}
+	else {
+		layerTree.addListener('checkboxclick', onLayerCheckboxClick);
+	}
 	//add listeners for layertree
 	layerTree.addListener('leafschange',leafsChangeFunction);
+
+	initExclusiveLayerGroups();
 
 	//deal with commercial external bg layers
 	if (enableBGMaps) {
@@ -1727,6 +1823,7 @@ function createPermalink(){
 
 	// selection
 	permalinkParams.selection = thematicLayer.params.SELECTION;
+
 	if (permaLinkURLShortener) {
 		permalink = encodeURIComponent(permalink + decodeURIComponent(Ext.urlEncode(permalinkParams)));
 	}
@@ -1741,20 +1838,30 @@ function addInfoButtonsToLayerTree() {
 	var treeRoot = layerTree.getNodeById("wmsNode");
 	treeRoot.firstChild.cascade(
 		function (n) {
-			// info button
-			var buttonId = 'layer_' + n.id;
-			Ext.DomHelper.insertBefore(n.getUI().getAnchor(), {
-				tag: 'b',
-				id: buttonId,
-				cls: 'layer-button x-tool custom-x-tool-info'
-			});
-            Ext.get(buttonId).on('click', function(e) {
-                if(typeof(interactiveLegendGetLegendURL) == 'undefined'){
-                    showLegendAndMetadata(n.text);
-                } else {
-                    showInteractiveLegendAndMetadata(n.text);
-                }
-            });
+			var layerProperties = wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]];
+			if (!layerProperties.showLegend && !layerProperties.showMetadata) {
+				// no info button, add blank element to keep text aligned
+				Ext.DomHelper.insertBefore(n.getUI().getAnchor(), {
+					tag: 'b',
+					cls: 'layer-button x-tool custom-x-tool-blank'
+				});
+			}
+			else {
+				// info button
+				var buttonId = 'layer_' + n.id;
+				Ext.DomHelper.insertBefore(n.getUI().getAnchor(), {
+					tag: 'b',
+					id: buttonId,
+					cls: 'layer-button x-tool custom-x-tool-info'
+				});
+				Ext.get(buttonId).on('click', function(e) {
+					if(typeof(interactiveLegendGetLegendURL) == 'undefined'){
+						showLegendAndMetadata(n.text);
+					} else {
+						showInteractiveLegendAndMetadata(n.text);
+					}
+				});
+			}
 		}
 	);
 }
@@ -1764,15 +1871,153 @@ function addAbstractToLayerGroups() {
 	treeRoot.firstChild.cascade(
 		function (n) {
 			if (! n.isLeaf()) {
+				var layerProperties = wmsLoader.layerProperties[wmsLoader.layerTitleNameMapping[n.text]];
 				if (n == treeRoot.firstChild) {
-					var thisAbstract = wmsLoader.projectSettings.service.abstract;
-				} else {
-					var thisAbstract = layerGroupString[lang]+ ' "' + n.text + '"';
+					layerProperties.abstract = wmsLoader.projectSettings.service.abstract;
 				}
-				wmsLoader.layerProperties[n.text].abstract = thisAbstract;
+				else if (layerProperties.abstract === undefined) {
+					layerProperties.abstract = layerGroupString[lang]+ ' "' + n.text + '"';
+				}
 			}
 		}
 	);
+}
+
+// apply initial exclusive layer groups: only a single layer of a group may be active, or none
+function initExclusiveLayerGroups() {
+	if (wmsLoader.projectSettings.capability.exclusiveLayerGroups.length == 0) {
+		// no exclusive layer groups
+		return;
+	}
+
+	// collect initially active layers
+	var activeLayers = [];
+	layerTree.root.firstChild.cascade(function(node) {
+		if (node.isLeaf() && node.attributes.checked) {
+			activeLayers.push(wmsLoader.layerTitleNameMapping[node.text]);
+		}
+	});
+
+	// collect layers of exclusive layer groups
+	var layersToUncheck = [];
+	for (var i=0; i<wmsLoader.projectSettings.capability.exclusiveLayerGroups.length; i++) {
+		var exclusiveGroup = wmsLoader.projectSettings.capability.exclusiveLayerGroups[i];
+
+		// get first group layer from active layers
+		var activeLayerName = null;
+		for (var l=0; l<exclusiveGroup.length; l++) {
+			var groupLayerName = exclusiveGroup[l];
+			if (activeLayers.indexOf(groupLayerName) != -1) {
+				activeLayerName = groupLayerName;
+				break;
+			}
+		}
+
+		// collect inactive group layers
+		for (var l=0; l<exclusiveGroup.length; l++) {
+			var groupLayerName = exclusiveGroup[l];
+			if (groupLayerName != activeLayerName) {
+				// add layer to uncheck if not yet in list
+				if (layersToUncheck.indexOf(groupLayerName) == -1) {
+					layersToUncheck.push(groupLayerName);
+				}
+			}
+		}
+	}
+
+	if (layersToUncheck.length > 0) {
+		// update layer tree
+		layerTree.root.firstChild.cascade(function(node) {
+			if (node.isLeaf() && node.attributes.checked) {
+				// uncheck layer node
+				if (layersToUncheck.indexOf(wmsLoader.layerTitleNameMapping[node.text]) != -1) {
+					node.getUI().toggleCheck(false);
+				}
+			}
+		});
+		layerTree.fireEvent("leafschange");
+	}
+}
+
+function onLayerCheckboxClick(node) {
+	if (wmsLoader.projectSettings.capability.exclusiveLayerGroups.length == 0) {
+		// no exclusive layer groups
+		return;
+	}
+
+	// apply exclusive layer groups: only a single layer of a group may be active, or none
+	if (node.attributes.checked) {
+		var layersToUncheck = [];
+		if (node.isLeaf()) {
+			// layer checked
+
+			// collect other layers of the first matching exclusive layer group
+			var activeLayerName = wmsLoader.layerTitleNameMapping[node.text];
+			for (var i=0; i<wmsLoader.projectSettings.capability.exclusiveLayerGroups.length; i++) {
+				var exclusiveGroup = wmsLoader.projectSettings.capability.exclusiveLayerGroups[i];
+				if (exclusiveGroup.indexOf(activeLayerName) != -1) {
+					layersToUncheck = exclusiveGroup.slice().remove(activeLayerName);
+					break;
+				}
+			}
+		}
+		else {
+			// layer group checked
+
+			// collect child layers
+			var childLayers = [];
+			node.cascade(function(node) {
+				if (node.isLeaf()) {
+					childLayers.push(wmsLoader.layerTitleNameMapping[node.text]);
+				}
+			});
+
+			// collect layers of exclusive layer groups for all child layers, keep first layer occuring in child layers active
+			for (var i=0; i<childLayers.length; i++) {
+				for (var g=0; g<wmsLoader.projectSettings.capability.exclusiveLayerGroups.length; g++) {
+					var exclusiveGroup = wmsLoader.projectSettings.capability.exclusiveLayerGroups[g];
+					if (exclusiveGroup.indexOf(childLayers[i]) != -1) {
+						// first matching exclusive layer group
+
+						// get first group layer from child layers
+						var activeLayerName = null;
+						for (var l=0; l<exclusiveGroup.length; l++) {
+							var groupLayerName = exclusiveGroup[l];
+							if (childLayers.indexOf(groupLayerName) != -1) {
+								activeLayerName = groupLayerName;
+								break;
+							}
+						}
+
+						// collect inactive group layers
+						for (var l=0; l<exclusiveGroup.length; l++) {
+							var groupLayerName = exclusiveGroup[l];
+							if (groupLayerName != activeLayerName) {
+								// add layer to uncheck if not yet in list
+								if (layersToUncheck.indexOf(groupLayerName) == -1) {
+									layersToUncheck.push(groupLayerName);
+								}
+							}
+						}
+
+						break;
+					}
+				}
+			}
+		}
+
+		if (layersToUncheck.length > 0) {
+			// update layer tree
+			layerTree.root.firstChild.cascade(function(node) {
+				if (node.isLeaf() && node.attributes.checked) {
+					// uncheck layer node
+					if (layersToUncheck.indexOf(wmsLoader.layerTitleNameMapping[node.text]) != -1) {
+						node.getUI().toggleCheck(false);
+					}
+				}
+			});
+		}
+	}
 }
 
 function applyPermalinkParams() {
@@ -1785,14 +2030,9 @@ function applyPermalinkParams() {
 	else {
 		//see if project is defined in GIS ProjectListing
 		//and has an opacities property
-		if (gis_projects) {
-			for (var i=0;i<gis_projects.topics.length;i++) {
-				for (var j=0;j<gis_projects.topics[i].projects.length;j++) {
-					if (gis_projects.topics[i].projects[j].name == layerTree.root.firstChild.text) {
-						opacities = gis_projects.topics[i].projects[j].opacities;
-					}
-				}
-			}
+		var gisProjectSettings = getGisProjectSettings(layerTree.root.firstChild.text);
+		if (gisProjectSettings != null) {
+			opacities = gisProjectSettings.opacities;
 		}
 	}
 	if (opacities) {
@@ -1861,10 +2101,12 @@ function setupLayerOrderPanel() {
 
 	layerOrderPanel.clearLayers();
 	for (var i=0; i<orderedLayers.length; i++) {
-		//because of a but in QGIS server we need to check if a layer from layerDrawingOrder actually really exists
-		//QGIS server is delivering invalid layer when linking to different projects
-		if (wmsLoader.layerProperties[orderedLayers[i]]) {
-			layerOrderPanel.addLayer(orderedLayers[i], wmsLoader.layerProperties[orderedLayers[i]].opacity);
+		//because of a but in QGIS Server we need to check if a layer from layerDrawingOrder actually really exists
+		//QGIS Server is delivering invalid layer when linking to different projects
+		var layerProperties = wmsLoader.layerProperties[orderedLayers[i]];
+		if (layerProperties && !layerProperties.wmtsLayer) {
+			// skip WMTS base layers
+			layerOrderPanel.addLayer(orderedLayers[i], layerProperties.opacity);
 		}
 	}
 
@@ -1877,6 +2119,7 @@ function setupLayerOrderPanel() {
 					if (wmsLoader.layerTitleNameMapping[this.attributes["text"]] == layer) {
 						this.getUI().toggleCheck();
 						// update active layers
+						layerTree.fireEvent('checkboxclick', this);
 						layerTree.fireEvent("leafschange");
 						return true;
 					}
@@ -1907,13 +2150,16 @@ function setupLayerOrderPanel() {
 	}
 }
 
-function updateLayerOrderPanel() {
-	// update layer order panel
-	var layersForOrderPanel = [];
-	layersForOrderPanel = layersForOrderPanel.reverse();
-	for (var i=0; i<layersForOrderPanel.length; i++) {
-		layerOrderPanel.addLayer(layersForOrderPanel[i], wmsLoader.layerProperties[layersForOrderPanel[i]].opacity);
-	}
+function updateLayerOrderPanelVisibilities() {
+	// update layer visibilities in layer order panel according to layer tree
+	layerTree.root.firstChild.cascade(function(node) {
+		if (node.isLeaf()) {
+			var layerName = wmsLoader.layerTitleNameMapping[node.text];
+			if (layerOrderPanel.layerVisible(layerName) != node.attributes.checked) {
+				layerOrderPanel.toggleLayerVisibility(layerName);
+			}
+		}
+	});
 }
 
 function activateGetFeatureInfo(doIt) {
@@ -2091,4 +2337,113 @@ function setGrayNameWhenOutsideScale() {
             }
         }
     }
+
+    if (enableWmtsBaseLayers) {
+        updateScaleBasedWmtsLayersVisibility(geoExtMap.map.getScale());
+    }
+}
+
+function getGisProjectSettings(topicName) {
+	if (gis_projects) {
+		// search in project listing
+		for (var i=0; i<gis_projects.topics.length; i++) {
+			for (var j=0; j<gis_projects.topics[i].projects.length; j++) {
+				if (gis_projects.topics[i].projects[j].name == topicName) {
+					return gis_projects.topics[i].projects[j];
+				}
+			}
+		}
+	}
+	return null;
+}
+
+// WMTS base layers
+
+function getWmtsLayersConfig(topicName) {
+	var gisProjectSettings = getGisProjectSettings(topicName);
+	if (gisProjectSettings != null) {
+		return gisProjectSettings.wmtsLayers;
+	}
+	return null;
+}
+
+function getWmtsLayers() {
+	return geoExtMap.map.getLayersBy('isWmtsLayer', true);
+}
+
+function updateWmtsBaseLayers(topicName, visibleWmtsLayers) {
+	// cleanup old WMTS layers
+	var oldWmtsLayers = getWmtsLayers();
+	for (var i=0; i<oldWmtsLayers.length; i++) {
+		geoExtMap.map.removeLayer(oldWmtsLayers[i]);
+	}
+
+	var wmtsLayersConfig = getWmtsLayersConfig(topicName);
+	if (wmtsLayersConfig != null) {
+		// create WMTS layers for current topic
+		var wmtsLayers = [];
+		for (var i=0; i<wmtsLayersConfig.length; i++) {
+			wmtsLayers.push(
+				new OpenLayers.Layer.WMTS(
+					OpenLayers.Util.extend(
+						wmtsLayersConfig[i].wmtsConfig,
+						{
+							visibility: false,
+							isBaseLayer: false,
+							// custom attributes
+							isWmtsLayer: true,
+							wmsLayerName: wmtsLayersConfig[i].wmsLayerName
+						}
+					)
+				)
+			);
+		}
+		wmtsLayers = wmtsLayers.reverse();
+
+		if (wmtsLayers.length > 0) {
+			// add WMTS layers
+			var thematicLayerIndex = geoExtMap.map.getLayerIndex(thematicLayer);
+			for (var i=0; i<wmtsLayers.length; i++) {
+				var wmtsLayer = wmtsLayers[i];
+				// add layer in front of main WMS layer
+				geoExtMap.map.addLayer(wmtsLayer);
+				geoExtMap.map.setLayerIndex(wmtsLayer, thematicLayerIndex);
+			}
+		}
+
+		setVisibleWmtsLayers(visibleWmtsLayers);
+	}
+}
+
+function setVisibleWmtsLayers(visibleWmtsLayers) {
+	// set WMTS layer visibility flags
+	var wmtsLayers = getWmtsLayers();
+	for (var i=0; i<wmtsLayers.length; i++) {
+		wmtsLayers[i].show = (visibleWmtsLayers.indexOf(wmtsLayers[i].wmsLayerName) != -1);
+	}
+	updateScaleBasedWmtsLayersVisibility(geoExtMap.map.getScale());
+}
+
+function updateScaleBasedWmtsLayersVisibility(scale) {
+	// set WMTS layer visibilities for current scale
+	var wmtsLayers = getWmtsLayers();
+	for (var i=0; i<wmtsLayers.length; i++) {
+		var wmtsLayer = wmtsLayers[i];
+		var visibility = wmtsLayer.show;
+		if (visibility) {
+			// check if current scale is in range
+			var layerProperties = wmsLoader.layerProperties[wmtsLayer.wmsLayerName];
+			if (layerProperties.minScale != undefined) {
+				visibility = visibility && (layerProperties.minScale > scale);
+			}
+			if (layerProperties.maxScale != undefined) {
+				visibility = visibility && (layerProperties.maxScale <= scale);
+			}
+		}
+		wmtsLayer.setVisibility(visibility);
+		if (!visibility) {
+			// hide layer immediately
+			wmtsLayer.removeBackBuffer();
+		}
+	}
 }

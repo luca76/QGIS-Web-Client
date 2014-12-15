@@ -1,4 +1,4 @@
-Quantum GIS (QGIS) Web Client
+QGIS Web Client
 Installation  and Configuration Guide
 %%date(%A %B %d, %Y)
 
@@ -115,7 +115,7 @@ On ubuntu you can meet these requirements by simply doing:
 sudo apt-get install libapache2-mod-fcgid
 ```
 
-The QGIS server compilation and installation will be covered in the QGIS manual.
+The QGIS Server compilation and installation will be covered in the QGIS manual.
 
 
 For searching:
@@ -177,7 +177,7 @@ A comma-separated list of layers that should be set visible on the project start
 visibleBackgroundLayer
 ```
 Optionally the name of the background layer that should be set visible on project start. You must have background layers enabled in
-GlobalOptions.js by setting enableBGMaps to true and a background layer must exist with this name. If either 
+GlobalOptions.js by setting enableBGMaps to true and a background layer must exist with this name. If either
 of these prerequisites is not met nothing happens and the parameter is simply ignored.
 
 ```
@@ -263,8 +263,11 @@ var simpleWmsSearch = {
   gridColumns: [
     {header: 'Name', dataIndex: 'name', menuDisabled: 'true'}
   ],
+  highlightFeature: false,
+  highlightLabel: 'name',
   selectionLayer: 'Country',
-  selectionZoom: 0
+  selectionZoom: 0,
+  doZoomToExtent: true
 };
 ```
 
@@ -280,9 +283,12 @@ var simpleWmsSearch = {
  -
 - ``gridColumns``: list of Ext.grid.GridPanel column configs to show search
   results
+- ``highlightFeature`` (optional): use QGIS WMS highlight instead of QGIS WMS selection if enabled
+- ``highlightLabel`` (optional): show this feature attribute as label if ``highlightFeature`` is enabled
 - ``selectionLayer``: name of layer for marking selected results (the same as
-  ``queryLayer``)
+  ``queryLayer``) if ``highlightFeature`` is not enabled
 - ``selectionZoom``: zoom level for jump-to when selecting results
+- ``doZoomToExtent`` (optional): zoom to feature extent when selecting results, overrides ``selectionZoom``
 -
 
 Request URL:
@@ -323,8 +329,11 @@ var urlRewriteSearch = {
     {header: 'PKUID', dataIndex: 'pkuid', menuDisabled: 'true'},
     {header: 'Colour', dataIndex: 'colour', menuDisabled: 'true'}
   ],
+  highlightFeature: false,
+  highlightLabel: 'colour',
   selectionLayer: 'Hello',
-  selectionZoom: 1
+  selectionZoom: 1,
+  doZoomToExtent: true
 };
 ```
 
@@ -339,8 +348,12 @@ var urlRewriteSearch = {
  -
 - ``gridColumns``: list of Ext.grid.GridPanel column configs to show search
   results
-- ``selectionLayer``: name of layer for marking selected results
+- ``highlightFeature`` (optional): use QGIS WMS highlight instead of QGIS WMS selection if enabled
+- ``highlightLabel`` (optional): show this feature attribute as label if ``highlightFeature`` is enabled
+- ``selectionLayer``: name of layer for marking selected results if ``highlightFeature`` is not enabled
 - ``selectionZoom``: zoom level for jump-to when selecting results
+- ``doZoomToExtent`` (optional): zoom to feature extent when selecting results, overrides ``selectionZoom``
+-
 
 For every search of this type you have to add a URL rewrite rule in the Apache
 config. *Note:* Linebreaks added for formatting - they should be removed in your
@@ -358,7 +371,7 @@ INFO_FORMAT=text/xml&SRS=EPSG:4326&FILTER=Hello:"colour"\ =\ '%1' [PT]
 The first RewriteCond matches the ``query`` id of the search panel config. The
 second RewriteCond extracts the values of the search request parameters.
 
-The RewriteRule composes the actual WMS GetFeatureInfo request to QGIS mapserver.
+The RewriteRule composes the actual WMS GetFeatureInfo request to QGIS Server.
 
 
 Request URL:
@@ -634,7 +647,7 @@ A new file ``site/js/Translations_custom.js`` is created. Copy this file to your
 
 = URL Rewriting =
 
-Using a standard installation of QGIS server, GlobalOptions.js will have a WMS
+Using a standard installation of QGIS Server, GlobalOptions.js will have a WMS
 server configuration like
 ```
 var serverAndCGI = "/cgi-bin/qgis_mapserv.fcgi";
@@ -691,20 +704,25 @@ back a hit list while the user is typing in the searchbox. It groups the
 results and returns a bounding box of the result. "getSearchGeom" returns
 the actual wkt geometry for a selected search result.
 
-These scripts are provided in two flavors: PHP and WSGI (Python). 
+These scripts are provided in two flavors: PHP and WSGI (Python).
 The PHP version should run out-of-the-box
 with just a few lines of configuration. There is no need to alter the DB
 table structure in order to use PHP search scripts because all needed informations are read from
 the project file. Another notable difference is that layer names are used instead of
 table names, this is in order to not disclose internal DB details. The PHP scripts are available
-under the ``php`` folder. 
+under the ``php`` folder.
 
-The Python wsgi search scripts provide an advanced, more configurable and 
+The Python wsgi search scripts provide an advanced, more configurable and
 more detailed search solution. They draw their results directly from dedicated relations
 in a PostGIS database. The WSGI scripts are available
 under the ``wsgi`` folder. It is recommended to
 install the wsgi scripts in a separate directory, e.g. /home/www/wsgi, a place
 that is not reachable by regular web traffic.
+
+There are two options to highlight a feature that is selected from the search results. If the option
+``enableSearchBoxWmsHighlight`` in ``GlobalOptions.js`` is enabled, the selected feature will be
+highlighted using QGIS WMS highlight. Otherwise the feature will be added as a vector feature to
+the highlight layer.
 
 == PHP Search ==
 
@@ -767,7 +785,8 @@ Example:
 /****************************
  * Map rewrite configuration
  */
-// Prefix map name with path
+// Prefix map name with path,  also supports $map_name parameter
+// substitution if you prefer to store project file in a pre-project subfolder
 #define('MAP_PATH_REWRITE', '/home/xxx/public_html/QGIS-Web-Client/projects/');
 // Append .qgs to the map name
 #define('MAP_PATH_APPEND_QGS', true);
@@ -843,7 +862,7 @@ WSGIScriptAliasMatch ^/wsgi/([^/]+) /home/www/wsgi/$1.wsgi
 === Adaption of the wsgi scripts to your settings and needs ===
 
 ==== DB connection ====
-In the file ``qwc_connect.py`` please edit the first line containing the db connection string. 
+In the file ``qwc_connect.py`` please edit the first line containing the db connection string.
 
 ```
 DB_CONN_STRING="host='myhost' dbname='mydb' port='5432' user='myuser' password='secret'"
@@ -984,6 +1003,7 @@ Translators:
 - Pavlo Taranov
 - Tudor Bărăscu
 - Uroš Preložnik
+- Klas Karlsson
 
 
 = Acknowledgements =

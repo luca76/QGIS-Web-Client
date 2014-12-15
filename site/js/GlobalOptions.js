@@ -4,7 +4,7 @@ var lang = "en"; //for available codes see array availableLanguages in file Glob
 //Help file (must be a local file)
 var helpfile = "help_en.html";
 
-//Servername (optional) and path and name name of QGIS mapserver FCGI-file
+//Servername (optional) and path and name name of QGIS Server FCGI-file
 //either with or without server-name - without servername recommended for easier porting to other servers
 //do not add a ? or & after the .fcgi extension
 var serverAndCGI = "/cgi-bin/qgis_mapserv.fcgi";
@@ -31,6 +31,7 @@ var showMetaDataInLegend = true;
 // if set to true every mouse position over feature of queriable layers is GetFeatureInfo request on server
 var enableHoverPopup = true;
 
+
 // use geodesic measures, i.e. not planar measures
 // this is useful if a projection with high distortion of length/area is used, eg.g. GoogleMercator
 var useGeodesicMeasurement = true;
@@ -38,9 +39,15 @@ var useGeodesicMeasurement = true;
 //search box for queries while typing
 //enable to use GeoNames search
 var useGeoNamesSearchBox = false;
+var geoNamesUserName = 'insert your geonames user name';
 //URL for custom search scripts
 var searchBoxQueryURL = null; // "/wsgi/search.wsgi?query=";
 var searchBoxGetGeomURL = null; // "/wsgi/getSearchGeom.wsgi";
+
+// use QGIS WMS highlight for selected search result in search box
+var enableSearchBoxWmsHighlight = false;
+// search result attribute to show as label if enableSearchBoxWmsHighlight is enabled
+var searchBoxWmsHighlightLabel = 'displaytext';
 
 // If set, will make sure that the layer for the search results is
 // visible. This feature will work out of the box if PHP scripts are
@@ -65,17 +72,25 @@ var enableBingCommercialMaps = false;
 if (enableBingCommercialMaps) {
     var bingApiKey = "add Bing api key here"; // http://msdn.microsoft.com/en-us/library/ff428642.aspx
 }
+
 var enableGoogleCommercialMaps = true;
+
+var enableOSMMaps = true;
+
 var enableBGMaps = false;
-if (enableBingCommercialMaps || enableGoogleCommercialMaps) {
+if (enableBingCommercialMaps || enableOSMMaps || enableGoogleCommercialMaps) {
 	enableBGMaps = true;
 }
 if (enableBGMaps) {
-	// enter the index of the backgroundLayer to be visible after loading, 
+	// enter the index of the backgroundLayer to be visible after loading,
 	// set to a value < 0 to not show any backgroundLayer
 	// this setting is overridden if a value for url-parameter visibleBackgroundLayer is passed
 	var initialBGMap = 0;
 }
+
+// enable to use WMTS base layers
+var enableWmtsBaseLayers = false;
+// NOTE: also set MapOptions according to WMTS
 
 // media base URL to match media links in layer attributes
 var mediaurl = '';
@@ -90,6 +105,26 @@ var showFieldNamesInClickPopup = true;
 var showFeatureInfoLayerTitle = true;
 // max-width and max-height of the feature-info popup can be controlled in site/css/popup.css
 
+
+// Custom WMS GetFeatureInfo results formatters: you can define custom
+// filter functions to apply custom formatting to values coming from
+// GetFeatureInfo requests when the user use the "identify" tool.
+// The same formatting functions can be normally also used as "renderer"
+// function passed to column configuration in the "gridColumns" property
+// of the grid configuration of the WMS GetFeatureInfo search panels.
+
+// Example formatter, takes the value, the column name and the layer name,
+// normally only the first parameter is used.
+function customURLFormatter(attValue, attName, layerName){
+    return '<a href="http://www.google.com/search?q=' + encodeURI(attValue) + '">' + attValue + '</a>';
+}
+
+// Formatters configuration
+var getFeatureInfoCustomFormatters = {
+    'Country': { // Layer name
+        'name': customURLFormatter // Can be an array if you need multiple formatters
+    }
+};
 
 //config for QGIS.SearchPanel
 //Number of results: FEATURE_COUNT in WMS request
@@ -111,8 +146,10 @@ var simpleWmsSearch = {
     }
   ],
   gridColumns: [
-    {header: 'Name', dataIndex: 'name', menuDisabled: 'true'}
+    {header: 'Name', dataIndex: 'name', menuDisabled: 'true', renderer: customURLFormatter}
   ],
+//  highlightFeature: true,
+//  highlightLabel: 'name',
   selectionLayer: 'Country',
   selectionZoom: 0,
   doZoomToExtent: true
@@ -139,6 +176,8 @@ var urlRewriteSearch = {
     {header: 'PKUID', dataIndex: 'pkuid', menuDisabled: 'true'},
     {header: 'Colour', dataIndex: 'colour', menuDisabled: 'true'}
   ],
+//  highlightFeature: true,
+//  highlightLabel: 'colour',
   selectionLayer: 'Hello',
   selectionZoom: 1
 };
@@ -148,7 +187,7 @@ var mapSearchPanelConfigs = {
   "helloworld": [simpleWmsSearch, urlRewriteSearch]
 };
 
-// ABP: needed for helloworld if no rewrite
+// Needed for helloworld project if rewrite is not active
 mapSearchPanelConfigs[project_map] = [simpleWmsSearch, urlRewriteSearch];
 
 //templates to define tooltips for a layer, to be shown on hover identify. The layer fields must be wrapped inside <%%> special tags.
@@ -216,7 +255,7 @@ var layerImageFormats = [
 //EPSG projection code of your QGIS project
 var authid = "EPSG:"+3857;
 
-//background transparency for the QGIS server generated layer (commercial background layers not effected)
+//background transparency for the QGIS Server generated layer (commercial background layers not effected)
 //set to true if you want the background to be transparent, layer image will be bigger (32 vs 24bit)
 var qgisLayerTransparency = true;
 
@@ -231,7 +270,7 @@ var MapOptions = {
 //  maxScale:50,
 //  minScale:40000000,
   numZoomLevels:ZOOM_LEVELS,
-  fractionalZoom: enableBGMaps ? false : true,
+  fractionalZoom: !enableWmtsBaseLayers && !enableBGMaps,
   transitionEffect:"resize",
   controls: []
 };
@@ -245,10 +284,13 @@ var LayerOptions = {
   transitionEffect:"resize",
   isBaseLayer: false,
   projection:authid,
-  yx: {"EPSG:900913": false}
+  yx: {"EPSG:900913": false},
   // If your projection is known to have an inverse axis order in WMS 1.3 compared to WMS 1.1 enter true for yx.
   // For EPSG:900913 OpenLayers should know it by default but because of a bug in OL 2.12 we enter it here.
-
+  tileOptions: {
+    // use POST for long URLs
+    maxGetUrlLength: 2048
+  }
 };
 
 //overview map settings - do not change variable names!
@@ -261,10 +303,16 @@ var OverviewMapOptions = {
 };
 var OverviewMapSize = new OpenLayers.Size(200,200);
 var OverviewMapMaximized = false; // is the overview map opend or closed by default
-var overviewLayer = new OpenLayers.Layer.WMS("Overview-Map",
+var overviewLayer = null;
+if (enableOSMMaps) {
+  overviewLayer = new OpenLayers.Layer.OSM();
+}
+else {
+  overviewLayer = new OpenLayers.Layer.WMS("Overview-Map",
   serverAndCGI+"?map=/home/web/qgis-web-client/projects/naturalearth_110million.qgs",
   {layers:"Land",format:"image/png"},
   {buffer:0,singleTile:true,transitionEffect:"resize"});
+}
 
 // prevent the user from choosing a print resolution
 // if fixedPrintResolution = null, the user is allowed to choose the print resolution.
@@ -349,8 +397,20 @@ var symbolizersHighLightLayer = {
   "Polygon": {
     strokeWidth: 2,
     strokeColor: "#FF8C00",
-    fillColor: "none"
+    fillColor: "none",
+    fillOpacity: 0
   }
+};
+
+// style for highlight labels of search results
+// font weight from 0 to 99 (Light: 25, Normal: 50, DemiBold: 63, Bold: 75, Black: 87)
+var highlightLabelStyle = {
+//  font: "Serif",
+  size: 12,
+//  weight: 75,
+  color: "#000000",
+  buffercolor: "#FFFFFF",
+  buffersize: 1
 };
 
 //styling for measure controls (distance and area)

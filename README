@@ -1,10 +1,10 @@
-Quantum GIS (QGIS) Web Client
+QGIS Web Client
 Installation  and Configuration Guide
-Thursday May 22, 2014
+Wednesday June 11, 2014
 
 
-Last Updated: Thursday May 22, 2014
-Last Change : Thursday May 22, 2014
+Last Updated: Wednesday June 11, 2014
+Last Change : Wednesday June 11, 2014
 
 
   1. For the terminally lazy
@@ -29,21 +29,8 @@ Last Change : Thursday May 22, 2014
   1. For the terminally lazy
   ==========================
 
-  sudo apt-get install apache2 libapache2-mod-fcgid
-  cp apache-conf/qgis-web-client.conf.tmpl apache-conf/qgis-web-client.conf
-
-Update the paths in the copied file then:
-
-  cd /etc/apache2/sites-available/
-  ln -s <path to apache-conf/qgis-web-client.conf> .
-  sudo a2enmod rewrite
-  sudo a2ensite qgis-web-client.conf
-  sudo /etc/init.d/apache2 reload
-
-1. Check the symlink in cgi-bin is correct.
-2. Check the QGIS libs are in your /etc/ld.so.conf path
-3. Copy site/index.xml and check paths match your system OR
-  Modify index.html and point your browser to that
+  edit (if necessary) the three needed parameters in install.sh
+  sudo ./install.sh
 
 
   2. Purpose
@@ -73,7 +60,7 @@ On ubuntu you can meet these requirements by simply doing:
 
   sudo apt-get install libapache2-mod-fcgid
 
-The QGIS server compilation and installation will be covered in the QGIS manual.
+The QGIS Server compilation and installation will be covered in the QGIS manual.
 
 For searching:
 
@@ -100,7 +87,7 @@ Translations (additional languages):
 
 Project settings and index:
 
-  site/index.xml or site/index.html
+  site/index.xml, site/index.php or site/index.html
 
 Stylesheet of project index:
 
@@ -212,8 +199,11 @@ Example:
     gridColumns: [
       {header: 'Name', dataIndex: 'name', menuDisabled: 'true'}
     ],
+    highlightFeature: false,
+    highlightLabel: 'name',
     selectionLayer: 'Country',
-    selectionZoom: 0
+    selectionZoom: 0,
+    doZoomToExtent: true
   };
 
 - title: title of the search tab
@@ -227,9 +217,12 @@ Example:
  - blankText: popup text for blank fields
 - gridColumns: list of Ext.grid.GridPanel column configs to show search
   results
+- highlightFeature (optional): use QGIS WMS highlight instead of QGIS WMS selection if enabled
+- highlightLabel (optional): show this feature attribute as label if highlightFeature is enabled
 - selectionLayer: name of layer for marking selected results (the same as
-  queryLayer)
+  queryLayer) if highlightFeature is not enabled
 - selectionZoom: zoom level for jump-to when selecting results
+- doZoomToExtent (optional): zoom to feature extent when selecting results, overrides selectionZoom
 
 Request URL:
 
@@ -270,8 +263,11 @@ would contain something like this:
       {header: 'PKUID', dataIndex: 'pkuid', menuDisabled: 'true'},
       {header: 'Colour', dataIndex: 'colour', menuDisabled: 'true'}
     ],
+    highlightFeature: false,
+    highlightLabel: 'colour',
     selectionLayer: 'Hello',
-    selectionZoom: 1
+    selectionZoom: 1,
+    doZoomToExtent: true
   };
 
 - title: title of the search tab
@@ -284,8 +280,11 @@ would contain something like this:
  - blankText: popup text for blank fields
 - gridColumns: list of Ext.grid.GridPanel column configs to show search
   results
-- selectionLayer: name of layer for marking selected results
+- highlightFeature (optional): use QGIS WMS highlight instead of QGIS WMS selection if enabled
+- highlightLabel (optional): show this feature attribute as label if highlightFeature is enabled
+- selectionLayer: name of layer for marking selected results if highlightFeature is not enabled
 - selectionZoom: zoom level for jump-to when selecting results
+- doZoomToExtent (optional): zoom to feature extent when selecting results, overrides selectionZoom
 
 For every search of this type you have to add a URL rewrite rule in the Apache
 config. *Note:* Linebreaks added for formatting - they should be removed in your
@@ -298,11 +297,10 @@ config file.
   REQUEST=GetFeatureInfo&LAYERS=Hello&QUERY_LAYERS=Hello&FEATURE_COUNT=20&
   INFO_FORMAT=text/xml&SRS=EPSG:4326&FILTER=Hello:"colour"\ =\ '%1' [PT]
 
-
 The first RewriteCond matches the query id of the search panel config. The
 second RewriteCond extracts the values of the search request parameters.
 
-The RewriteRule composes the actual WMS GetFeatureInfo request to QGIS mapserver.
+The RewriteRule composes the actual WMS GetFeatureInfo request to QGIS Server.
 
 Request URL:
 
@@ -538,7 +536,7 @@ A new file site/js/Translations_custom.js is created. Copy this file to your ser
   5. URL Rewriting
   ================
 
-Using a standard installation of QGIS server, GlobalOptions.js will have a WMS
+Using a standard installation of QGIS Server, GlobalOptions.js will have a WMS
 server configuration like
 
   var serverAndCGI = "/cgi-bin/qgis_mapserv.fcgi";
@@ -605,6 +603,11 @@ in a PostGIS database. The WSGI scripts are available
 under the wsgi folder. It is recommended to
 install the wsgi scripts in a separate directory, e.g. /home/www/wsgi, a place
 that is not reachable by regular web traffic.
+
+There are two options to highlight a feature that is selected from the search results. If the option
+enableSearchBoxWmsHighlight in GlobalOptions.js is enabled, the selected feature will be
+highlighted using QGIS WMS highlight. Otherwise the feature will be added as a vector feature to
+the highlight layer.
 
 
   6.1. PHP Search
@@ -888,6 +891,7 @@ Translators:
 - Pavlo Taranov
 - Tudor Bărăscu
 - Uroš Preložnik
+- Klas Karlsson
 
 
   9. Acknowledgements
